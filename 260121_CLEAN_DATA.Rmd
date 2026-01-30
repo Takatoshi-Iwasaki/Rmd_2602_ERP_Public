@@ -1,0 +1,432 @@
+---
+title: "Data Cleaning Process"
+output: html_document
+date: "2025-12-09"
+---
+
+```{r, include=FALSE}
+# Load packages.
+library(readxl)
+library(jtools)
+library(lmtest)
+library(ggplot2)
+library(dplyr)
+library(gridExtra)
+library(grid)
+library(xtable)
+library(tidyverse)
+library(patchwork)
+library(hrbrthemes)
+library(scales)
+library(directlabels)
+library(stargazer)
+library(zoo)
+library(data.table)
+library(xts)
+library(AER)
+library(plm)
+library(rcompanion)
+library(Hmisc)
+library(eurostat)
+library(imfweo)
+
+```
+
+```{r Custom Functions}
+####################################################################################
+####     Custom functions for data cleaning.                                    ####
+####################################################################################
+
+choose_country_y <- function(df, name, start_date, end_date, country){
+  df <- df[df$COUNTRY %in% country,]
+  coln_info <- names(df)[sapply(df, class) %in% c("character")]
+  cols_info <- df[, (names(df) %in% coln_info)]
+  coln_data <- names(df)[sapply(df, class) %in% c("numeric")]
+  cols_data <- df[, (names(df) %in% coln_data)]
+  strt_col_num <- which(colnames(cols_data)==start_date)
+  end_col_num <- which(colnames(cols_data)==end_date)
+  cols_data <- cols_data[,c(strt_col_num:end_col_num)]
+  clean_df <- cbind(cols_info, cols_data)
+  return(clean_df)
+}
+
+# Selecting Indicator types.
+delete_info <- function(df){
+  COUNTRY <- df[,"COUNTRY"]
+  data_cols <- names(df)[sapply(df, class) %in% c("numeric")]
+  df_data <- df[, (names(df) %in% data_cols)]
+  clean_df <- cbind(COUNTRY, df_data)
+  
+  long <- melt(setDT(clean_df), id.vars = "COUNTRY", variable.name = "year")
+  return(long)
+}
+
+delete_info_trade <- function(df, name){
+  index <- df[,c("COUNTRY","COUNTERPART_COUNTRY")]
+  data_cols <- names(df)[sapply(df, class) %in% c("numeric")]
+  df_data <- df[, (names(df) %in% data_cols)]
+  clean_df <- cbind(index, df_data)
+  
+  long <- melt(setDT(clean_df), id.vars = c("COUNTRY", "COUNTERPART_COUNTRY"), variable.name = "year")
+  return(long)
+}
+
+# Function to calculate index for multiple countries from long data.
+cal_index <- function(data, country, base_year){
+  base_year <- as.character(base_year)
+  df <- data[data$COUNTERPART_COUNTRY == country,]
+  df$year_match <- as.character(df$year)
+  
+  base_value <- df[df$year_match == base_year,]
+  base_value <- as.numeric(base_value$value)
+  df$index <- df$value / base_value * 100
+  df <- as_tibble(df)
+  df_final <- df[, c("COUNTRY", "COUNTERPART_COUNTRY", "year", "value", "index")]
+  
+  return(df_final)
+}
+
+p_stars <- function(x, fix_spacing){
+  starsA <- ifelse(x < 0.01, "***", ifelse(x < 0.05, "**", ifelse(x < 0.1, "*", "")))
+  starsB <- ifelse(x < 0.01, "\\*\\s+\\*\\s+\\*", ifelse(x < 0.05, "\\*\\s+\\*", ifelse(x < 0.1, "*", "")))
+  if (fix_spacing == T) {
+    stars <- starsB
+  } else {
+    stars <- starsA
+  }
+  
+  return(stars)
+  # Paste for notes: 
+  # p-value: *p<0.1; **p<0.05; ***p<0.01
+}
+
+ldif <- function(x){
+  y = diff(log(x))
+  return(y)
+}
+```
+
+```{r Lists}
+# g7_countries <- c("Canada", "France", "Germany", "Italy", "United States", "United Kingdom") # G7 Countries.
+
+oecd_countries <- c("Australia", "Austria", "Belgium", "Canada", "Chile", "Colombia", 
+                    "Costa Rica", "Czech Republic", "Denmark", "Estonia, Republic of", "Finland", "France", 
+                    "Germany", "Greece", "Hungary", "Iceland", "Ireland", "Israel",
+                    "Italy", "Japan", "Korea, Republic of", "Latvia, Republic of", "Lithuania, Republic of", "Luxembourg", 
+                    "Mexico", "Netherlands, The", "New Zealand", "Norway", "Poland, Republic of", 
+                    "Portugal", "Slovak Republic", "Slovenia, Republic of", "Spain", "Sweden", 
+                    "Switzerland", "Türkiye, Republic of", "United Kingdom", "United States") # OECD 38 Countries, IMF spelling.
+
+# for EU process.
+eu_join_list <- data.frame(
+  country = c("Austria", "Belgium", "Estonia, Republic of", "Finland", "France", 
+                    "Germany", "Greece", "Ireland",
+                    "Italy", "Latvia, Republic of", "Lithuania, Republic of", "Luxembourg", 
+                    "Netherlands, The",
+                    "Portugal", "Slovak Republic", "Slovenia, Republic of", "Spain"),
+  eu_date = c("1999-01-01", "1999-01-01", "2011-01-01", "1999-01-01", "1999-01-01",
+                "1999-01-01", "2001-01-01", "1999-01-01",
+                "1999-01-01", "2014-01-01", "2015-01-01", "1999-01-01",
+                "1999-01-01",
+                "1999-01-01", "2009-01-01", "2007-03-01", "1999-01-01") %>% as.Date(.,format = "%Y-%m-%d")
+)
+
+# Select Data for Quarterly Analysis.
+df_frequency <- "Quarterly"
+```
+
+```{r Read Data, include=FALSE}
+## Read data from external file. 
+# Trade data (IMTS)
+IMTS <- read_csv("data/IMF_STA_IMTS.csv")
+# Annual GDP (GDPA)
+GDPA <- read_csv("data/IMF_STA_GDP_Annual.csv")
+# Quarterly GDP (GDPQ)
+GDPQ <- read_csv("data/IMF_STA_GDP_Quarterly.csv")
+# Producer Cost (PPI)
+PPI <- read_csv("data/IMF_STA_PPI.csv")
+# Exchange Rate (ER)
+ER <- read_csv("data/IMF_STA_ER.csv")
+# Effective Exchange Rate (EER)
+EER <- read_csv("data/IMF_STA_EER.csv")
+```
+
+```{r Select years and countries}
+####################################################################################
+####      Settings to construct data set.                                       ####
+####################################################################################
+
+# Restrict loading date range and countries for less work.
+restriction_start <- as.yearqtr(as.Date("1970-01-01", format = "%Y-%m-%d"))
+restriction_end <- as.yearqtr(as.Date("2025-12-01", format = "%Y-%m-%d"))
+dataset_restriction <- oecd_countries
+
+```
+================================================================================
+================================================================================
+================================================================================
+## Data cleaning process.
+```{r Clean Data, include=FALSE}
+################                                                    ################
+################                                                    ################
+####                                                                            ####
+####     Cleaning data set and constructing a subset for less work.             ####
+####     Settings are from "Settings to construct data set".                    ####
+####                                                                            ####
+################                                                    ################
+################                                                    ################
+
+####################################################################################
+####     Creating GDP (in UDS) Long data frame.                                 ####
+####################################################################################
+
+# G1: Subset data set by country, frequency, and date range.
+GDP_Q <- GDPQ %>% .[,colSums(is.na(.))<nrow(.)] %>% .[.$COUNTRY %in% dataset_restriction,] %>% 
+  .[.$INDICATOR == "Gross domestic product (GDP)",] %>%
+  .[.$S_ADJUSTMENT == "Seasonally adjusted (SA)",] %>%
+  .[.$TYPE_OF_TRANSFORMATION == "Domestic currency",] %>%
+  .[.$PRICE_TYPE == "Current prices",]
+longGDP_Q <- GDP_Q %>% delete_info()
+colnames(longGDP_Q) <- c("country", "year", "gdp_usd")
+longGDP_Q$year <-  longGDP_Q$year %>% as.character() %>% as.yearqtr(.,format = "%Y-Q%q")
+GDP_Q <- NULL
+
+####################################################################################
+####     Creating PPI Long data frame.                                          ####
+####################################################################################
+
+# P1: Subset data set by country, frequency, and date range.
+PPI_Q <- PPI[PPI$FREQUENCY == df_frequency, ] %>% .[,colSums(is.na(.))<nrow(.)] %>% .[.$COUNTRY %in% dataset_restriction,] %>% 
+  .[.$INDICATOR == "Producer price index (PPI)",] %>%
+  .[.$TYPE_OF_TRANSFORMATION == "Index",]
+longPPI_Q <- PPI_Q %>% delete_info()
+colnames(longPPI_Q) <- c("country", "year", "ppi")
+longPPI_Q$year <- longPPI_Q$year %>% as.character() %>% as.yearqtr(.,format = "%Y-Q%q")
+PPI_Q <- NULL
+
+####################################################################################
+####     Calculating exchange rate cross rate.                                  ####
+####     (Also calculating EU currencies).                                      ####
+####     (Not entirely sure about EU currency methodology).                     ####
+####################################################################################
+
+# E1A: Home currency exchange rate.
+ER_Q <- ER[ER$FREQUENCY == df_frequency, ] %>% .[,colSums(is.na(.))<nrow(.)] %>% .[.$COUNTRY %in% dataset_restriction,] %>% 
+  .[.$TYPE_OF_TRANSFORMATION == "Period average",] %>%
+  .[.$INDICATOR == "Domestic currency per US Dollar",]
+longER_Q <- ER_Q %>% delete_info()
+longER_Q$date <- longER_Q$year %>% as.yearqtr(.,format= "%Y-Q%q") %>% as.Date()
+colnames(longER_Q) <- c("country", "year", "er", "date")
+ER_Q <- NULL
+# E1B: For EU Currencies. 
+long_ER_Q_EURO <- ER[ER$FREQUENCY == df_frequency, ] %>% .[,colSums(is.na(.))<nrow(.)] %>% .[.$COUNTRY %in% "Euro Area (EA)",] %>% 
+  .[.$TYPE_OF_TRANSFORMATION == "Period average",] %>% .[.$INDICATOR == "Domestic currency per US Dollar",] %>% delete_info()
+colnames(long_ER_Q_EURO) <- c("euro", "date", "er")
+long_ER_Q_EURO$date <- long_ER_Q_EURO$date %>% as.yearqtr(.,format="%Y-Q%q") %>% as.Date
+long_ER_Q_EURO <- eu_join_list %>% group_by(country) %>% 
+  summarise(
+    date = seq(eu_date,as.Date("2025-10-01",format = "%Y-%m-%d"),by = "quarter")
+    ) %>%
+  full_join(., long_ER_Q_EURO, by = "date")
+long_ER_Q_EURO$euro <- as.factor(1)
+
+jferq <- full_join(longER_Q, long_ER_Q_EURO, by = c("country", "date")) %>% 
+  mutate(
+    er = coalesce(er.x, er.y),
+    euro = factor(case_when(
+      is.na(euro) ~ FALSE,
+      euro == "1" ~ TRUE,
+      TRUE ~ FALSE
+      ))
+         ) %>% 
+  as.tibble() %>% 
+  .[c("date", "country", "er", "euro")]
+colnames(jferq) <- c("year", "country", "er_usd", "country_euro")
+longER_Q <- NULL
+long_ER_Q_EURO <- NULL
+
+# E2A: Counterpart country currency exchange rate.
+ER_Q <- ER[ER$FREQUENCY == df_frequency, ] %>% .[,colSums(is.na(.))<nrow(.)] %>% .[.$COUNTRY %in% dataset_restriction,] %>% 
+  .[.$TYPE_OF_TRANSFORMATION == "Period average",] %>%
+  .[.$INDICATOR == "US Dollar per domestic currency",]
+longER_Q <- ER_Q %>% delete_info()
+longER_Q$date <- longER_Q$year %>% as.yearqtr(.,format= "%Y-Q%q") %>% as.Date()
+colnames(longER_Q) <- c("country", "year", "er", "date")
+ER_Q <- NULL
+# E2B: For EU Currencies. 
+long_ER_Q_EURO <- ER[ER$FREQUENCY == df_frequency, ] %>% .[,colSums(is.na(.))<nrow(.)] %>% .[.$COUNTRY %in% "Euro Area (EA)",] %>% 
+  .[.$TYPE_OF_TRANSFORMATION == "Period average",] %>% .[.$INDICATOR == "US Dollar per domestic currency",] %>% delete_info()
+colnames(long_ER_Q_EURO) <- c("euro", "date", "er")
+long_ER_Q_EURO$date <- long_ER_Q_EURO$date %>% as.yearqtr(.,format="%Y-Q%q") %>% as.Date
+long_ER_Q_EURO <- eu_join_list %>% group_by(country) %>% 
+  summarise(
+    date = seq(eu_date,as.Date("2025-10-01",format = "%Y-%m-%d"),by = "quarter")
+    ) %>%
+  full_join(., long_ER_Q_EURO, by = "date")
+long_ER_Q_EURO$euro <- as.factor(1)
+
+jferq_cc <- full_join(longER_Q, long_ER_Q_EURO, by = c("country", "date")) %>% 
+  mutate(
+    er = coalesce(er.x, er.y),
+    euro = factor(case_when(
+      is.na(euro) ~ FALSE,
+      euro == "1" ~ TRUE,
+      TRUE ~ FALSE
+      ))
+         ) %>% 
+  as.tibble() %>% 
+  .[c("date", "country", "er", "euro")]
+colnames(jferq_cc) <- c("year", "counterpart_country", "er_usd_cc", "countercountry_euro")
+longER_Q <- NULL
+long_ER_Q_EURO <- NULL
+
+# E3A: Calculate the cross exchange rate (Base currency USD).
+# Using E1A/B and E2A/B.
+cross_er <- full_join(jferq, jferq_cc, by = "year") %>% as.tibble()
+cross_er$cer <- cross_er$er_usd * cross_er$er_usd_cc
+longCER_Q <- cross_er[c("year", "country", "counterpart_country", "cer", "country_euro", "countercountry_euro")]
+longCER_Q$year <- longCER_Q$year %>% as.yearqtr()
+# Above is the cross exchange rate for each country pair.
+cross_er <- NULL
+jferq <- NULL
+jferq_cc <- NULL
+
+####################################################################################
+####    Create Trade Data in Local Currency.                                    ####
+####    (Reversing the methodology in the DOTS guide).                          ####
+####    (Also calculating EU currencies as it is required to calculate trade).  ####
+####    (Not entirely sure about EU currency methodology).                      ####
+####################################################################################
+
+# T1A: Import montly trade for calculation.
+Trade_M <- IMTS[IMTS$FREQUENCY == "Monthly", ] %>% .[,colSums(is.na(.))<nrow(.)] %>% .[.$COUNTRY %in% dataset_restriction,] %>% .[.$COUNTERPART_COUNTRY %in% dataset_restriction,]
+Trade_MM <- Trade_M[Trade_M$INDICATOR == "Imports of goods, Cost insurance freight (CIF), US dollar",]
+long_Trade_MM <- delete_info_trade(Trade_MM)
+colnames(long_Trade_MM) <- c("country", "counterpart_country", "date", "imports")
+long_Trade_MM$date <- long_Trade_MM$date %>% as.yearmon(.,format="%Y-M%m") %>% as.Date()
+Trade_MX <- Trade_M[Trade_M$INDICATOR == "Exports of goods, Free on board (FOB), US dollar",]
+long_Trade_MX <- delete_info_trade(Trade_MX)
+colnames(long_Trade_MX) <- c("country", "counterpart_country", "date", "exports")
+long_Trade_MX$date <- long_Trade_MX$date %>% as.yearmon(.,format="%Y-M%m") %>% as.Date()
+Trade_M <- NULL
+Trade_MM <- NULL
+Trade_MX <- NULL
+
+ER_M <- ER[ER$FREQUENCY == "Monthly", ] %>% .[,colSums(is.na(.))<nrow(.)] %>% .[.$COUNTRY %in% dataset_restriction,] %>% 
+  .[.$TYPE_OF_TRANSFORMATION == "Period average",] %>%
+  .[.$INDICATOR == "Domestic currency per US Dollar",]
+long_ER_M <- delete_info(ER_M)
+colnames(long_ER_M) <- c("country", "date", "er")
+long_ER_M$date <- long_ER_M$date %>% as.yearmon(.,format="%Y-M%m") %>% as.Date()
+ER_M <- NULL
+
+# T1B: Fix EURO problem.
+long_ER_M_EURO <- ER[ER$FREQUENCY == "Monthly", ] %>% .[,colSums(is.na(.))<nrow(.)] %>% .[.$COUNTRY %in% "Euro Area (EA)",] %>% 
+  .[.$TYPE_OF_TRANSFORMATION == "Period average",] %>% .[.$INDICATOR == "Domestic currency per US Dollar",] %>% delete_info()
+colnames(long_ER_M_EURO) <- c("euro", "date", "er")
+long_ER_M_EURO$date <- long_ER_M_EURO$date %>% as.yearmon(.,format="%Y-M%m") %>% as.Date
+long_ER_M_EURO <- eu_join_list %>% group_by(country) %>% 
+  summarise(
+    date = seq(eu_date,as.Date("2025-10-01",format = "%Y-%m-%d"),by = "month")
+    ) %>%
+  full_join(., long_ER_M_EURO, by = "date")
+long_ER_M_EURO$euro <- as.factor(1)
+
+jfer <- full_join(long_ER_M, long_ER_M_EURO, by = c("country", "date")) %>% 
+  mutate(er = coalesce(er.x, er.y)) %>% 
+  as.tibble() %>% 
+  .[c("date", "country", "er", "euro")]
+long_ER_M <- NULL
+long_ER_M_EURO <- NULL
+
+# T1C: Calculate monthly trade in local currency.
+long_calc_MM <- full_join(long_Trade_MM, jfer, by = c("country", "date"))
+long_calc_MM$imports_lcc <- long_calc_MM$imports * 1000000 * long_calc_MM$er
+long_calc_MX <- full_join(long_Trade_MX, jfer, by = c("country", "date"))
+long_calc_MX$exports_lcc <- long_calc_MX$exports * 1000000 * long_calc_MX$er
+
+long_MM_clean <- long_calc_MM %>% as.tibble() %>% .[c("date","country","counterpart_country","imports_lcc")]
+long_MX_clean <- long_calc_MX %>% as.tibble() %>% .[c("date","country","counterpart_country","exports_lcc")]
+
+long_M_All <- full_join(long_MM_clean, long_MX_clean, by = c("date", "country", "counterpart_country"))
+long_Trade_MM <- NULL
+long_Trade_MX <- NULL
+long_calc_MM <- NULL
+long_calc_MX <- NULL
+long_MM_clean <- NULL
+long_MX_clean <- NULL
+jfer <- NULL
+
+# T2A: Calculating Quarterly from monthly.
+Trade_hc_list <- unique(long_M_All$country)
+longTradeLcc_Q <- NULL
+for (hc in Trade_hc_list) {
+  long_M_partial <- long_M_All[long_M_All$country == hc,]
+  Trade_lcc_partial_Q <- long_M_partial %>%
+    mutate(
+      date = as.Date(date),
+      year = as.yearqtr(date)
+    ) %>%
+    group_by(counterpart_country, year) %>%
+    summarise(
+      imports = sum(imports_lcc),
+      exports = sum(exports_lcc),
+    ) %>%
+    ungroup()
+  Trade_lcc_partial_Q$country <- hc
+  longTradeLcc_Q <- rbind(longTradeLcc_Q, Trade_lcc_partial_Q)
+}
+longTradeLcc_Q <- longTradeLcc_Q[c("year", "country", "counterpart_country", "imports", "exports")] %>% .[.$year >= restriction_start & .$year <= restriction_end, ]
+## Above is the Quarterly trade (imports and exports) prices of each country set in its own currency.
+long_M_All <- NULL
+Trade_hc_list <- NULL
+hc <- NULL
+long_M_partial <- NULL
+Trade_lcc_partial_Q <- NULL
+```
+
+```{r Join and Export Data}
+# GDP data (for country).
+head(longGDP_Q)
+# PPI data (for country).
+head(longPPI_Q)
+# Cross exchange rate data.
+head(longCER_Q)
+# Trade data in local currency.
+head(longTradeLcc_Q)
+
+####################################################################################
+####    Join and export subset data frame.                                      ####
+####################################################################################
+# Add GDP and PPI for counterpart country.
+longGDPcc_Q <- longGDP_Q
+colnames(longGDPcc_Q) <- c("counterpart_country","year","gdp_usd_cc")
+longPPIcc_Q <- longPPI_Q
+colnames(longPPIcc_Q) <- c("counterpart_country","year","ppi_cc")
+
+# Join all long data frame.
+master_df <- full_join(longGDP_Q, longPPI_Q, by = c("country", "year")) %>% 
+  full_join(longCER_Q, ., by = c("country", "year")) %>% 
+  full_join(longTradeLcc_Q, ., by = c("country","counterpart_country", "year")) %>% 
+  full_join(., longGDPcc_Q, by = c("year", "counterpart_country")) %>% 
+  full_join(., longPPIcc_Q, by = c("year", "counterpart_country"))
+
+longGDPcc_Q <- NULL
+longPPIcc_Q <- NULL
+
+# Create dummy for seasonality.
+master_df$Q1 <- grepl("Q1", master_df$year) %>% as.factor()
+master_df$Q2 <- grepl("Q2", master_df$year) %>% as.factor()
+master_df$Q3 <- grepl("Q3", master_df$year) %>% as.factor()
+
+master_df <- master_df[!is.na(master_df$year),]
+master_df <- master_df[!is.na(master_df$country),]
+master_df <- master_df[!is.na(master_df$counterpart_country),]
+
+write_csv(master_df, file = "OECD_1970-2025_Quarterly.csv")      # Save as csv.
+saveRDS(master_df, file = "OECD_1970-2025_Quarterly.rds")      # Save as R data set.
+master_df <- NULL
+```
+After cleaning, we export the dataframe so we can load it without redoing the cleaning process.
+The "country_euro" columns is <TRUE> when the "country" is using the EURO currency as the exchange rate. Same for the "countercountry_euro" column as well. Note that this does not imply that the country is registered as a member of EU. The difference: "joined" EU vs "adapt" EURO as currency.
+

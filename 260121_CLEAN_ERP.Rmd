@@ -1,0 +1,752 @@
+---
+title: "Clean_ERP"
+output: html_document
+date: "2025-12-09"
+---
+
+```{r, include=FALSE}
+# Load packages.
+library(readxl)
+library(jtools)
+library(lmtest)
+library(ggplot2)
+library(dplyr)
+library(gridExtra)
+library(grid)
+library(xtable)
+library(tidyverse)
+library(patchwork)
+library(hrbrthemes)
+library(scales)
+library(directlabels)
+library(stargazer)
+library(zoo)
+library(data.table)
+library(xts)
+library(AER)
+library(plm)
+library(rcompanion)
+library(Hmisc)
+library(eurostat)
+library(imfweo)
+```
+
+```{r Custom Functions}
+####################################################################################
+####     Custom functions for data cleaning.                                    ####
+####################################################################################
+ldif <- function(x){
+  y = diff(log(x))
+  return(y)
+}
+lenx <- function(x){
+  y = length(na.omit(x)) 
+  return(y)
+}
+find_skip <- function(start, end, obs){
+  start <- start %>% as.yearqtr()
+  end <- end %>% as.yearqtr()
+  obs_est <- 1 + (end - start) * 4 
+  if (obs_est == obs) {
+    y = FALSE
+  } else {y = TRUE
+  }
+  return(y)
+}
+```
+
+```{r Lists}
+# g7_countries <- c("Canada", "France", "Germany", "Italy", "United States", "United Kingdom") # G7 Countries.
+
+oecd_countries <- c("Australia", "Austria", "Belgium", "Canada", "Chile", "Colombia", 
+                    "Costa Rica", "Czech Republic", "Denmark", "Estonia, Republic of", "Finland", "France", 
+                    "Germany", "Greece", "Hungary", "Iceland", "Ireland", "Israel",
+                    "Italy", "Japan", "Korea, Republic of", "Latvia, Republic of", "Lithuania, Republic of", "Luxembourg", 
+                    "Mexico", "Netherlands, The", "New Zealand", "Norway", "Poland, Republic of", 
+                    "Portugal", "Slovak Republic", "Slovenia, Republic of", "Spain", "Sweden", 
+                    "Switzerland", "Türkiye, Republic of", "United Kingdom", "United States") # OECD 38 Countries, IMF spelling.
+
+# Select Data for Quarterly Analysis.
+df_frequency <- "Quarterly"
+
+fnote <- "\\parbox{15cm}{Quarterly data from 1997 Q1 to 2025 Q3. Trade data from the IMF IMTS dataset and exchange rate data from the IMF ER dataset. The panel regression contains Japan as the base country and 38 OECD countries as the trade partners.}"
+```
+
+```{r}
+# Load the cleaned data and do regressinon.
+lmdf_read <- readRDS("OECD_1970-2025_Quarterly.rds")
+```
+
+```{r}
+####################################################################################
+####      Here, enter the desired analysis time span ("start" and "end").       ####
+####      Also specify the country(is) (home country), and the                  ####
+####    counterpart country(is) that is to be analyzed.                         ####
+####################################################################################
+
+# Specify time range start (Eg: 1980Q1)
+start <- "1997-Q1" %>% as.yearqtr(.,format="%Y-Q%q")
+end <- "2025-Q3" %>% as.yearqtr(.,format="%Y-Q%q")
+# Set home country list an counter part country list.
+country_list <- oecd_countries
+counterpart_country_list <- oecd_countries
+
+country <- "Japan"
+# number of lags 
+k <- 4
+
+# Restrict the dataset based on the home and c-country.
+lmdf <- lmdf_read[lmdf_read$country %in% country_list, ] %>%
+  .[.$counterpart_country %in% counterpart_country_list, ] %>% 
+  .[.$year >= start & .$year <= end, ]
+
+oil <- read_csv("data/FRED_POILWTIUSDQ.csv")
+colnames(oil) <- c("year", "oil_price")
+oil$year <- oil$year %>% as.yearqtr()
+
+lmdf <- full_join(lmdf, oil, by = "year") %>% filter(., !is.na(country))
+```
+
+================================================================================
+================================================================================
+
+                    Analysis on Japan's Imports 
+
+================================================================================
+================================================================================
+```{r}
+# Models. FOR IMPORTS.
+# Campa & Goldberg 2005, lagged terms.
+model1_1_sr <- ldif(imports) ~ ldif(cer) + lag(ldif(cer), 1:k) +
+                ldif(ppi_cc) + lag(ldif(ppi_cc), 1:k) + ldif(gdp_usd)
+
+# Campa & Goldberg 2005, lagged terms, with other controls.
+model1_2_sr <- ldif(imports) ~ ldif(cer) + lag(ldif(cer), 1:k) +
+                ldif(ppi_cc) + lag(ldif(ppi_cc), 1:k) + ldif(gdp_usd) +
+                Q1 + Q2 + Q3
+
+# Adding autoregressive term.
+model2_sr <- ldif(imports) ~ lag(ldif(imports),1) + ldif(cer) + lag(ldif(cer), 1:k) +
+                ldif(ppi_cc) + lag(ldif(ppi_cc), 1:k) + ldif(gdp_usd) +
+                Q1 + Q2 + Q3
+
+# Adding autoregressive term and oil price.
+model3_sr <- ldif(imports) ~ lag(ldif(imports),1) + ldif(cer) + lag(ldif(cer), 1:k) +
+                ldif(ppi_cc) + lag(ldif(ppi_cc), 1:k) + ldif(gdp_usd) + ldif(oil_price) +
+                Q1 + Q2 + Q3
+
+model1_lr <- ldif(imports) ~ ldif(cer) + L1_cer_minus_cer + L2_cer_minus_cer + L3_cer_minus_cer + L4_cer_minus_cer + 
+  ldif(ppi_cc) + lag(ldif(ppi_cc), 1:k) + ldif(gdp_usd) + 
+  Q1 + Q2 + Q3
+
+model2_lr <- ldif(imports) ~ lag(ldif(imports),1) + ldif(cer) + L1_cer_minus_cer + L2_cer_minus_cer + L3_cer_minus_cer + L4_cer_minus_cer + 
+  ldif(ppi_cc) + lag(ldif(ppi_cc), 1:k) + ldif(gdp_usd) + 
+  Q1 + Q2 + Q3
+```
+
+```{r ANALYSIS FOR JAPAN}
+# Data.
+rgpdf_country_a1 <- lmdf[lmdf$country == country,] %>% 
+    .[.$counterpart_country != country,] %>% 
+  pdata.frame(.,index = c("counterpart_country", "year"))
+
+# Short-run Regression.
+result1_1_sr <- plm(model1_1_sr, data = rgpdf_country_a1, effect = "individual", model = "random")
+result1_2_sr <- plm(model1_2_sr, data = rgpdf_country_a1, effect = "individual", model = "random")
+result2_sr <- plm(model2_sr, data = rgpdf_country_a1, effect = "individual", model = "random")
+result3_sr <- plm(model3_sr, data = rgpdf_country_a1, effect = "individual", model = "random")
+
+sr_res_a1 <- list(result1_1_sr, result1_2_sr, result2_sr, result3_sr)
+
+stargazer(sr_res_a1, type = "latex", font.size = "scriptsize", label = "fig:sr.a1",
+          column.sep.width = "31pt",
+          title = "Results for Short-run Dynamic Models on Japan’s Import Prices",
+          dep.var.labels.include = F,
+          dep.var.caption = "Dependent variable: $\\Delta p^m_{t}$",
+          covariate.labels = c(
+            "Autoregressive Term $( \\Delta p^m_{t-1} )$", 
+            "Exchange Rate $( \\Delta e_{t} )$", 
+            "lag 1 $( \\Delta e_{t-1})$", 
+            "lag 2 $( \\Delta e_{t-2})$",
+            "lag 3 $( \\Delta e_{t-3})$",
+            "lag 4 $( \\Delta e_{t-4})$",
+            "Proucer Price Index $( \\Delta ppi_{it} )$",
+            "lag 1 $( \\Delta ppi_{i(t-1)} )$",
+            "lag 2 $( \\Delta ppi_{i(t-2)} )$",
+            "lag 3 $( \\Delta ppi_{i(t-3)} )$",
+            "lag 4 $( \\Delta ppi_{i(t-4)} )$",
+            "Real GDP $( \\Delta gdp_{t} )$",
+            "Oil Price $( \\Delta oil_t)$",
+            "Control $( Q_1 )$",
+            "Control $( Q_2 )$",
+            "Control $( Q_3 )$"),
+          notes = fnote)
+        
+# Long-run Regression.
+# first-order long-run transformation
+for (K in 1:k) {
+  rgpdf_country_a1[[paste0("L", K, "_cer_minus_cer")]] <-
+    lag(rgpdf_country_a1$cer, K) - rgpdf_country_a1$cer
+}
+
+result1_lr <- plm(model1_lr, data = rgpdf_country_a1, effect = "individual", model = "random")
+result2_lr <- plm(model2_lr, data = rgpdf_country_a1, effect = "individual", model = "random")
+
+lr_res_a1 <- list(result1_lr, result2_lr)
+
+stargazer(lr_res_a1, type = "latex", 
+          font.size = "scriptsize", label = "fig:lr.a1",
+          column.sep.width = "31pt",
+          title = "Results for Long-run Dynamic Models on Japan's Import Prices",
+          dep.var.labels.include = F,
+          dep.var.caption = "Dependent variable: $\\Delta p^m_t$",
+          covariate.labels = c(
+            "Autoregressive Term $( \\Delta p^m_{t-1} )$", 
+            "Long-run Pass-through Elasticity ($\\hat{\\theta}$)", 
+            "DELETE", 
+            "DELETE",
+            "DELETE",
+            "DELETE",
+            "Proucer Price Index $( \\Delta ppi_{it} )$",
+            "lag 1 $( \\Delta ppi_{i(t-1)} )$",
+            "lag 2 $( \\Delta ppi_{i(t-2)} )$",
+            "lag 3 $( \\Delta ppi_{i(t-3)} )$",
+            "lag 4 $( \\Delta ppi_{i(t-4)} )$",
+            "Real GDP $( \\Delta gdp_{t} )$",
+            "Oil Price $( \\Delta oil_t)$",
+            "Control $( Q_1 )$",
+            "Control $( Q_2 )$",
+            "Control $( Q_3 )$",
+            "Constant"),
+          notes = fnote)
+
+# summary stats
+sumstat_a1 <- rgpdf_country_a1 %>% 
+  as.tibble() %>% 
+  .[c("counterpart_country", "year", "imports", "cer", "gdp_usd", "ppi_cc")] %>% drop_na() %>%
+  group_by(counterpart_country) %>%
+  summarise(
+    start = min(as.yearqtr(year)),
+    end = max(as.yearqtr(year)),
+    obs = min(lenx(imports), lenx(cer), lenx(gdp_usd), lenx(ppi_cc)),
+    skips = find_skip(start, end, obs),
+    .groups = 'drop', # Drops the grouping structure after summarizing
+  ) %>% mutate(across(where(is.numeric), round, 3))
+```
+
+================================================================================
+================================================================================
+
+                    Analysis on Exports Toward Japan 
+
+================================================================================
+================================================================================
+```{r}
+# Models. FOR EXPORTS
+# Campa & Goldberg 2005, lagged terms.
+model1_1_sr <- ldif(exports) ~ ldif(cer) + lag(ldif(cer), 1:k) +
+                ldif(ppi) + lag(ldif(ppi), 1:k) + ldif(gdp_usd_cc)
+
+# Campa & Goldberg 2005, lagged terms, with other controls.
+model1_2_sr <- ldif(exports) ~ ldif(cer) + lag(ldif(cer), 1:k) +
+                ldif(ppi) + lag(ldif(ppi), 1:k) + ldif(gdp_usd_cc) +
+                Q1 + Q2 + Q3
+
+# Adding autoregressive term.
+model2_sr <- ldif(exports) ~ lag(ldif(exports),1) + ldif(cer) + lag(ldif(cer), 1:k) +
+                ldif(ppi) + lag(ldif(ppi), 1:k) + ldif(gdp_usd_cc) +
+                Q1 + Q2 + Q3
+
+# Adding autoregressive term and oil price.
+model3_sr <- ldif(exports) ~ lag(ldif(exports),1) + ldif(cer) + lag(ldif(cer), 1:k) +
+                ldif(ppi) + lag(ldif(ppi), 1:k) + ldif(gdp_usd_cc) + ldif(oil_price) +
+                Q1 + Q2 + Q3
+
+model1_lr <- ldif(exports) ~ ldif(cer) + L1_cer_minus_cer + L2_cer_minus_cer + L3_cer_minus_cer + L4_cer_minus_cer + 
+  ldif(ppi) + lag(ldif(ppi), 1:k) + ldif(gdp_usd_cc) + 
+  Q1 + Q2 + Q3
+
+model2_lr <- ldif(exports) ~ lag(ldif(exports),1) + ldif(cer) + L1_cer_minus_cer + L2_cer_minus_cer + L3_cer_minus_cer +  + L4_cer_minus_cer + ldif(ppi) + lag(ldif(ppi), 1:k) + ldif(gdp_usd_cc) + 
+  Q1 + Q2 + Q3
+```
+
+```{r ANALYSIS FOR JAPAN}
+# Data.
+rgpdf_country_a2 <- lmdf[lmdf$country != country,] %>% 
+    .[.$counterpart_country == country,] %>%
+  pdata.frame(.,index = c("country", "year"))
+
+# Short-run Regression.
+result1_1_sr <- plm(model1_1_sr, data = rgpdf_country_a2, effect = "individual", model = "random")
+result1_2_sr <- plm(model1_2_sr, data = rgpdf_country_a2, effect = "individual", model = "random")
+result2_sr <- plm(model2_sr, data = rgpdf_country_a2, effect = "individual", model = "random")
+result3_sr <- plm(model3_sr, data = rgpdf_country_a2, effect = "individual", model = "random")
+
+sr_res_a2 <- list(result1_1_sr, result1_2_sr, result2_sr, result3_sr)
+
+stargazer(sr_res_a2, type = "latex", font.size = "scriptsize", label = "fig:sr.a2",
+          column.sep.width = "29pt",
+          title = "Results for Short-run Dynamic Models on Export Prices to Japan",
+          dep.var.labels.include = F,
+          dep.var.caption = "Dependent variable: $\\Delta p^x_{it}$",
+          covariate.labels = c(
+            "Autoregressive Term $( \\Delta p^x_{i(t-1)} )$", 
+            "Exchange Rate $( \\Delta e_{it} )$", 
+            "lag 1 $( \\Delta e_{i(t-1)})$", 
+            "lag 2 $( \\Delta e_{i(t-2)})$",
+            "lag 3 $( \\Delta e_{i(t-3)})$",
+            "lag 4 $( \\Delta e_{i(t-4)})$",
+            "Proucer Price Index $( \\Delta ppi_{it} )$",
+            "lag 1 $( \\Delta ppi_{i(t-1)} )$",
+            "lag 2 $( \\Delta ppi_{i(t-2)} )$",
+            "lag 3 $( \\Delta ppi_{i(t-3)} )$",
+            "lag 4 $( \\Delta ppi_{i(t-4)} )$",
+            "Real GDP $( \\Delta gdp_{t} )$",
+            "Oil Price $( \\Delta oil_t)$",
+            "Control $( Q_1 )$",
+            "Control $( Q_2 )$",
+            "Control $( Q_3 )$"),
+          notes = fnote)
+
+# Long-run Regression.
+# first-order long-run transformation
+for (K in 1:k) {
+  rgpdf_country_a2[[paste0("L", K, "_cer_minus_cer")]] <-
+    lag(rgpdf_country_a2$cer, K) - rgpdf_country_a2$cer
+}
+
+result1_lr <- plm(model1_lr, data = rgpdf_country_a2, effect = "individual", model = "random")
+result2_lr <- plm(model2_lr, data = rgpdf_country_a2, effect = "individual", model = "random")
+
+lr_res_a2 <- list(result1_lr, result2_lr)
+
+stargazer(lr_res_a2, type = "latex", 
+          font.size = "scriptsize", label = "fig:lr.a2",
+          column.sep.width = "30pt",
+          title = "Results for Long-run Dynamic Models on Export Prices to Japan",
+          dep.var.labels.include = F,
+          dep.var.caption = "Dependent variable: $\\Delta p^x_{it}$",
+          covariate.labels = c(
+            "Autoregressive Term $( \\Delta p^x_{i(t-1)} )$", 
+            "Long-run Pass-through Elasticity $(\\hat{\\theta})$", 
+            "DELETE", 
+            "DELETE",
+            "DELETE",
+            "DELETE",
+            "Proucer Price Index $( \\Delta ppi_{it} )$",
+            "lag 1 $( \\Delta ppi_{i(t-1)} )$",
+            "lag 2 $( \\Delta ppi_{i(t-2)} )$",
+            "lag 3 $( \\Delta ppi_{i(t-3)} )$",
+            "lag 4 $( \\Delta ppi_{i(t-4)} )$",
+            "Real GDP $( \\Delta gdp_{t} )$",
+            "Oil Price $( \\Delta oil_t)$",
+            "Seasonal Control $( Q_1 )$",
+            "Seasonal Control $( Q_2 )$",
+            "Seasonal Control $( Q_3 )$",
+            "Constant"),
+          notes = fnote)
+
+# summary stats
+sumstat_a2 <- rgpdf_country_a2 %>% 
+  as.tibble() %>% 
+  .[c("country", "year", "exports", "cer", "gdp_usd_cc", "ppi")] %>% drop_na() %>%
+  group_by(country) %>%
+  summarise(
+    start = min(as.yearqtr(year)),
+    end = max(as.yearqtr(year)),
+    obs = min( lenx(exports), lenx(cer), lenx(gdp_usd_cc), lenx(ppi)),
+    skips = find_skip(start, end, obs),
+    .groups = 'drop', # Drops the grouping structure after summarizing
+  ) %>% mutate(across(where(is.numeric), round, 3))
+```
+
+================================================================================
+================================================================================
+
+                    Analysis on Japan's Exports 
+
+================================================================================
+================================================================================
+
+```{r}
+# Models. FOR EXPORTS
+# Campa & Goldberg 2005, lagged terms.
+model1_1_sr <- ldif(exports) ~ ldif(cer) + lag(ldif(cer), 1:k) +
+                ldif(ppi) + lag(ldif(ppi), 1:k) + ldif(gdp_usd_cc)
+
+# Campa & Goldberg 2005, lagged terms, with other controls.
+model1_2_sr <- ldif(exports) ~ ldif(cer) + lag(ldif(cer), 1:k) +
+                ldif(ppi) + lag(ldif(ppi), 1:k) + ldif(gdp_usd_cc) +
+                Q1 + Q2 + Q3
+
+# Adding autoregressive term.
+model2_sr <- ldif(exports) ~ lag(ldif(exports),1) + ldif(cer) + lag(ldif(cer), 1:k) +
+                ldif(ppi) + lag(ldif(ppi), 1:k) + ldif(gdp_usd_cc) +
+                Q1 + Q2 + Q3
+
+# Adding autoregressive term and oil price.  
+model3_sr <- ldif(exports) ~ lag(ldif(exports),1) + ldif(cer) + lag(ldif(cer), 1:k) +
+                ldif(ppi) + lag(ldif(ppi), 1:k) + ldif(gdp_usd_cc) + ldif(oil_price) +
+                Q1 + Q2 + Q3
+
+model1_lr <- ldif(exports) ~ ldif(cer) + L1_cer_minus_cer + L2_cer_minus_cer + L3_cer_minus_cer + L4_cer_minus_cer + 
+  ldif(ppi) + lag(ldif(ppi), 1:k) + ldif(gdp_usd_cc) +  
+  Q1 + Q2 + Q3
+
+model2_lr <- ldif(exports) ~ lag(ldif(exports),1) + ldif(cer) + L1_cer_minus_cer + L2_cer_minus_cer + L3_cer_minus_cer +  + L4_cer_minus_cer + 
+  ldif(ppi) + lag(ldif(ppi), 1:k) + ldif(gdp_usd_cc) + 
+  Q1 + Q2 + Q3
+```
+
+```{r ANALYSIS FOR JAPAN}
+# Data.
+rgpdf_country_a3 <- lmdf[lmdf$country == country,] %>% 
+    .[.$counterpart_country != country,] %>%
+  pdata.frame(.,index = c("counterpart_country", "year"))
+
+# Short-run Regression.
+result1_1_sr <- plm(model1_1_sr, data = rgpdf_country_a3, effect = "individual", model = "random", random.method = "nerlove")
+result1_2_sr <- plm(model1_2_sr, data = rgpdf_country_a3, effect = "individual", model = "random", random.method = "nerlove")
+result2_sr <- plm(model2_sr, data = rgpdf_country_a3, effect = "individual", model = "random", random.method = "nerlove")
+result3_sr <- plm(model3_sr, data = rgpdf_country_a3, effect = "individual", model = "random", random.method = "nerlove")
+
+sr_res_a3 <- list(result1_1_sr, result1_2_sr, result2_sr, result3_sr)
+
+stargazer(sr_res_a3, type = "latex", font.size = "scriptsize", label = "fig:sr.a3",
+          column.sep.width = "37pt",
+          title = "Results for Short-run Dynamic Models on Japan's Export Prices",
+          dep.var.labels.include = F,
+          dep.var.caption = "Dependent variable: $\\Delta p^x_t$",
+          covariate.labels = c(
+            "Autoregressive Term $( \\Delta p^x_{t-1} )$", 
+            "Exchange Rate $( \\Delta e_{t} )$", 
+            "lag 1 $( \\Delta e_{t-1})$", 
+            "lag 2 $( \\Delta e_{t-2})$",
+            "lag 3 $( \\Delta e_{t-3})$",
+            "lag 4 $( \\Delta e_{t-4})$",
+            "Proucer Price Index $( \\Delta ppi_{t} )$",
+            "lag 1 $( \\Delta ppi_{t-1} )$",
+            "lag 2 $( \\Delta ppi_{t-2} )$",
+            "lag 3 $( \\Delta ppi_{t-3} )$",
+            "lag 4 $( \\Delta ppi_{t-4} )$",
+            "Real GDP $( \\Delta gdp_{it} )$",
+            "Oil Price $( \\Delta oil_t)$",
+            "Control $( Q_1 )$",
+            "Control $( Q_2 )$",
+            "Control $( Q_3 )$"),
+          notes = fnote)
+
+# Long-run Regression.
+# first-order long-run transformation
+for (K in 1:k) {
+  rgpdf_country_a3[[paste0("L", K, "_cer_minus_cer")]] <-
+    lag(rgpdf_country_a3$cer, K) - rgpdf_country_a3$cer
+}
+
+result1_lr <- plm(model1_lr, data = rgpdf_country_a3, effect = "individual", model = "random", random.method = "nerlove")
+result2_lr <- plm(model2_lr, data = rgpdf_country_a3, effect = "individual", model = "random", random.method = "nerlove")
+
+lr_res_a3 <- list(result1_lr, result2_lr)
+
+stargazer(lr_res_a3, type = "latex", 
+          font.size = "scriptsize", label = "fig:lr.a3",
+          column.sep.width = "30pt",
+          title = "Results for Long-run Dynamic Models on Japan's Export Prices",
+          dep.var.labels.include = F,
+          dep.var.caption = "Dependent variable: $\\Delta p^x_t$",
+          covariate.labels = c(
+            "Autoregressive Term $( \\Delta p^x_{t-1} )$", 
+            "Long-run Pass-through Elasticity $(\\hat{\\theta})$", 
+            "DELETE", 
+            "DELETE",
+            "DELETE",
+            "DELETE",
+            "Proucer Price Index $( \\Delta ppi_{t} )$",
+            "lag 1 $( \\Delta ppi_{t-1} )$",
+            "lag 2 $( \\Delta ppi_{t-2} )$",
+            "lag 3 $( \\Delta ppi_{t-3} )$",
+            "lag 4 $( \\Delta ppi_{t-4} )$",
+            "Real GDP $( \\Delta gdp_{it} )$",
+            "Oil Price $( \\Delta oil_t)$",
+            "Seasonal Control $( Q_1 )$",
+            "Seasonal Control $( Q_2 )$",
+            "Seasonal Control $( Q_3 )$",
+            "Constant"),
+          notes = fnote)
+
+# summary stats
+sumstat_a3 <- rgpdf_country_a3 %>% 
+  as.tibble() %>% 
+  .[c("counterpart_country", "year", "exports", "cer", "gdp_usd_cc", "ppi")] %>% drop_na() %>%
+  group_by(counterpart_country) %>%
+  summarise(
+    start = min(as.yearqtr(year)),
+    end = max(as.yearqtr(year)),
+    obs = min(lenx(exports), lenx(cer), lenx(gdp_usd_cc), lenx(ppi)),
+    skips = find_skip(start, end, obs),
+    .groups = 'drop', # Drops the grouping structure after summarizing
+  ) %>% mutate(across(where(is.numeric), round, 3))
+```
+
+================================================================================
+================================================================================
+
+                    Analysis on Imports From Japan 
+
+================================================================================
+================================================================================
+```{r}
+# Models. FOR IMPORTS.
+# Campa & Goldberg 2005, lagged terms.
+model1_1_sr <- ldif(imports) ~ ldif(cer) + lag(ldif(cer), 1:k) +
+                ldif(ppi_cc) + lag(ldif(ppi_cc), 1:k) + ldif(gdp_usd)
+
+# Campa & Goldberg 2005, lagged terms, with other controls.
+model1_2_sr <- ldif(imports) ~ ldif(cer) + lag(ldif(cer), 1:k) +
+                ldif(ppi_cc) + lag(ldif(ppi_cc), 1:k) + ldif(gdp_usd) +
+                Q1 + Q2 + Q3
+
+# Adding autoregressive term.
+model2_sr <- ldif(imports) ~ lag(ldif(imports),1) + ldif(cer) + lag(ldif(cer), 1:k) +
+                ldif(ppi_cc) + lag(ldif(ppi_cc), 1:k) + ldif(gdp_usd) +
+                Q1 + Q2 + Q3
+
+# Adding autoregressive term and oil price.
+model3_sr <- ldif(imports) ~ lag(ldif(imports),1) + ldif(cer) + lag(ldif(cer), 1:k) +
+                ldif(ppi_cc) + lag(ldif(ppi_cc), 1:k) + ldif(gdp_usd) + ldif(oil_price) +
+                Q1 + Q2 + Q3
+
+model1_lr <- ldif(imports) ~ ldif(cer) + L1_cer_minus_cer + L2_cer_minus_cer + L3_cer_minus_cer + L4_cer_minus_cer + 
+  ldif(ppi_cc) + lag(ldif(ppi_cc), 1:k) + ldif(gdp_usd) + 
+  Q1 + Q2 + Q3
+
+model2_lr <- ldif(imports) ~ lag(ldif(imports),1) + ldif(cer) + L1_cer_minus_cer + L2_cer_minus_cer + L3_cer_minus_cer + L4_cer_minus_cer + 
+  ldif(ppi_cc) + lag(ldif(ppi_cc), 1:k) + ldif(gdp_usd) + 
+  Q1 + Q2 + Q3
+```
+
+```{r ANALYSIS FOR JAPAN}
+# Data.
+rgpdf_country_a4 <- lmdf[lmdf$country != country,] %>% 
+    .[.$counterpart_country == country,] %>% 
+  pdata.frame(.,index = c("country", "year"))
+
+# Short-run Regression.
+result1_1_sr <- plm(model1_1_sr, data = rgpdf_country_a4, effect = "individual", model = "random", random.method = "nerlove")
+result1_2_sr <- plm(model1_2_sr, data = rgpdf_country_a4, effect = "individual", model = "random", random.method = "nerlove")
+result2_sr <- plm(model2_sr, data = rgpdf_country_a4, effect = "individual", model = "random", random.method = "nerlove")
+result3_sr <- plm(model3_sr, data = rgpdf_country_a4, effect = "individual", model = "random", random.method = "nerlove")
+
+sr_res_a4 <- list(result1_1_sr, result1_2_sr, result2_sr, result3_sr)
+
+stargazer(sr_res_a4, type = "latex", font.size = "scriptsize", label = "fig:sr.a4",
+          column.sep.width = "29pt",
+          title = "Results for Short-run Dynamic Models on Import Prices form Japan",
+          dep.var.labels.include = F,
+          dep.var.caption = "Dependent variable: $\\Delta p^m_{it}$",
+          covariate.labels = c(
+            "Autoregressive Term $( \\Delta p^m_{i(t-1)} )$", 
+            "Exchange Rate $( \\Delta e_{it} )$", 
+            "lag 1 $( \\Delta e_{i(t-1)})$", 
+            "lag 2 $( \\Delta e_{i(t-2)})$",
+            "lag 3 $( \\Delta e_{i(t-3)})$",
+            "lag 4 $( \\Delta e_{i(t-4)})$",
+            "Proucer Price Index $( \\Delta ppi_{t} )$",
+            "lag 1 $( \\Delta ppi_{t-1} )$",
+            "lag 2 $( \\Delta ppi_{t-2} )$",
+            "lag 3 $( \\Delta ppi_{t-3} )$",
+            "lag 4 $( \\Delta ppi_{t-4} )$",
+            "Real GDP $( \\Delta gdp_{it} )$",
+            "Oil Price $( \\Delta oil_t)$",
+            "Control $( Q_1 )$",
+            "Control $( Q_2 )$",
+            "Control $( Q_3 )$"),
+          notes = fnote)
+
+# Long-run Regression.
+
+# first-order long-run transformation
+for (K in 1:k) {
+  rgpdf_country_a4[[paste0("L", K, "_cer_minus_cer")]] <-
+    lag(rgpdf_country_a4$cer, K) - rgpdf_country_a4$cer
+}
+
+result1_lr <- plm(model1_lr, data = rgpdf_country_a4, effect = "individual", model = "random", random.method = "nerlove")
+result2_lr <- plm(model2_lr, data = rgpdf_country_a4, effect = "individual", model = "random", random.method = "nerlove")
+
+lr_res_a4 <- list(result1_lr, result2_lr)
+
+stargazer(lr_res_a4, type = "latex", 
+          font.size = "scriptsize", label = "fig:lr.a4",
+          column.sep.width = "30pt",
+          title = "Results for Long-run Dynamic Models on Import Prices from Japan",
+          dep.var.labels.include = F,
+          dep.var.caption = "Dependent variable: $\\Delta p^m_{it}$",
+          covariate.labels = c(
+            "Autoregressive Term $( \\Delta p^m_{i(t-1)} )$", 
+            "Long-run Pass-through Elasticity $(\\hat{\\theta})$", 
+            "DELETE", 
+            "DELETE",
+            "DELETE",
+            "DELETE",
+            "Proucer Price Index $( \\Delta ppi_{t} )$",
+            "lag 1 $( \\Delta ppi_{t-1} )$",
+            "lag 2 $( \\Delta ppi_{t-2} )$",
+            "lag 3 $( \\Delta ppi_{t-3} )$",
+            "lag 4 $( \\Delta ppi_{t-4} )$",
+            "Real GDP $( \\Delta gdp_{it} )$",
+            "Oil Price $( \\Delta oil_t)$",
+            "Seasonal Control $( Q_1 )$",
+            "Seasonal Control $( Q_2 )$",
+            "Seasonal Control $( Q_3 )$",
+            "Constant"),
+          notes = fnote)
+
+# summary stats
+sumstat_a4 <- rgpdf_country_a4 %>% 
+  as.tibble() %>% 
+  .[c("country", "year", "imports", "cer", "gdp_usd", "ppi_cc")] %>% drop_na() %>%
+  group_by(country) %>%
+  summarise(
+    start = min(as.yearqtr(year)),
+    end = max(as.yearqtr(year)),
+    obs = min(lenx(imports), lenx(cer), lenx(gdp_usd), lenx(ppi_cc)),
+    skips = find_skip(start, end, obs),
+    .groups = 'drop', # Drops the grouping structure after summarizing
+  ) %>% mutate(across(where(is.numeric), round, 3))
+```
+================================================================================
+================================================================================
+
+                               Summary Stats 
+
+================================================================================
+================================================================================
+```{r}
+colnames(sumstat_a1) <- c("Countries", "start", "end", "obs", "skips")
+colnames(sumstat_a2) <- c("Countries", "start", "end", "obs", "skips")
+colnames(sumstat_a3) <- c("Countries", "start", "end", "obs", "skips")
+colnames(sumstat_a4) <- c("Countries", "start", "end", "obs", "skips")
+
+sumstat_a12 <- full_join(sumstat_a1, sumstat_a2, by = "Countries") %>% mutate(across(everything(), as.character))
+sumstat_a34 <- full_join(sumstat_a3, sumstat_a4, by = "Countries") %>% mutate(across(everything(), as.character))
+
+sumstat_a12 <- rbind(sumstat_a12,
+                     c("TOTAL", "", "", sum(as.numeric(sumstat_a12$obs.x)), "", "", "", 
+                       sum(as.numeric(sumstat_a12$obs.y)), ""))
+sumstat_a34 <- rbind(sumstat_a34,
+                     c("TOTAL", "", "", sum(as.numeric(sumstat_a34$obs.x)), "", "", "", 
+                       sum(as.numeric(sumstat_a34$obs.y)), ""))
+
+stargazer(sumstat_a12, summary = F, type = "latex", rownames = F,
+          font.size = "scriptsize", label = "fig:sumstat.a12",
+          column.sep.width = "10pt", no.space = F,
+          title = "Data Coverage of Data on Japan's Import Prices and on the Trade Partners' Export Prices to Japan",
+          notes = "\\parbox{15cm}{\\textit{Notes:} Columns (1) to (4) show the results on data for Japan's import prices (Perspective I.), and columns (5) to (8) show the results on data for the 38 OECD countrys' export prices to Japan (Perspective II.). The \"start\" and \"end\" columns show when the data starts and end. The \"obs\" column shows the number of observations for the country. The \"skips\" column takes a value of \"TRUE\" when a year is skipped in the dataset, implying there are time series continuity issues in the data set.}")
+
+stargazer(sumstat_a34, summary = F, type = "latex", rownames = F,
+          font.size = "scriptsize", label = "fig:sumstat.a12",
+          column.sep.width = "10pt", no.space = F,
+          title = "Data Coverage of Data on Japan's Export Prices and on the Trade Partners' Import Prices from Japan",
+          notes = "\\parbox{15cm}{\\textit{Notes:} Columns (1) to (4) show the results on data for Japan's export prices (Perspective III.), and columns (5) to (8) show the results on data for the 38 OECD countrys' import prices from Japan (Perspective IV.). The \"start\" and \"end\" columns show when the data starts and end. The \"obs\" column shows the number of observations for the country. The \"skips\" column takes a value of \"TRUE\" when a year is skipped in the dataset, implying there are time series continuity issues in the data set.}")
+```
+
+
+================================================================================
+================================================================================
+
+                               Robustness Tests 
+
+================================================================================
+================================================================================
+```{r Robustness Tests}
+# Panel unit-root test.
+urt_a1_p <- purtest(ldif(rgpdf_country_a1$imports), test = "ips", exo = "intercept")
+urt_a1_e <- purtest(ldif(rgpdf_country_a1$cer), test = "ips", exo = "intercept")
+urt_a1_y <- purtest(ldif(rgpdf_country_a1$gdp_usd), test = "ips", exo = "intercept")
+urt_a1_w <- purtest(ldif(rgpdf_country_a1$ppi_cc), test = "ips", exo = "intercept")
+
+urt_a2_p <- purtest(ldif(rgpdf_country_a2$exports), test = "ips", exo = "intercept")
+urt_a2_e <- purtest(ldif(rgpdf_country_a2$cer), test = "ips", exo = "intercept")
+urt_a2_y <- purtest(ldif(rgpdf_country_a2$gdp_usd_cc), test = "ips", exo = "intercept")
+urt_a2_w <- purtest(ldif(rgpdf_country_a2$ppi), test = "ips", exo = "intercept")
+
+urt_a3_p <- purtest(ldif(rgpdf_country_a3$exports), test = "ips", exo = "intercept")
+urt_a3_e <- purtest(ldif(rgpdf_country_a3$cer), test = "ips", exo = "intercept")
+urt_a3_y <- purtest(ldif(rgpdf_country_a3$gdp_usd_cc), test = "ips", exo = "intercept")
+urt_a3_w <- purtest(ldif(rgpdf_country_a3$ppi), test = "ips", exo = "intercept")
+
+urt_a4_p <- purtest(ldif(rgpdf_country_a4$imports), test = "ips", exo = "intercept")
+urt_a4_e <- purtest(ldif(rgpdf_country_a4$cer), test = "ips", exo = "intercept")
+urt_a4_y <- purtest(ldif(rgpdf_country_a4$gdp_usd), test = "ips", exo = "intercept")
+urt_a4_w <- purtest(ldif(rgpdf_country_a4$ppi_cc), test = "ips", exo = "intercept")
+
+unirt_res <- rbind(
+  c(
+    urt_a1_p$statistic$p.value,
+    NA,
+    urt_a1_e$statistic$p.value,
+    urt_a1_y$statistic$p.value,
+    urt_a1_w$statistic$p.value
+    ),
+  c(
+    NA,
+    urt_a2_p$statistic$p.value,
+    urt_a2_e$statistic$p.value,
+    urt_a2_y$statistic$p.value,
+    urt_a2_w$statistic$p.value
+    ),
+  c(
+    NA,
+    urt_a3_p$statistic$p.value,
+    urt_a3_e$statistic$p.value,
+    urt_a3_y$statistic$p.value,
+    urt_a3_w$statistic$p.value
+    ),
+  c(
+    urt_a4_p$statistic$p.value,
+    NA,
+    urt_a4_e$statistic$p.value,
+    urt_a4_y$statistic$p.value,
+    urt_a4_w$statistic$p.value
+    )
+) %>% as.data.frame()
+rownames(unirt_res) <- c("(1) Japan's Import Prices",
+                         "(2) Trade Partners' Export Prices to Japan",
+                         "(3) Japan's Export Prices",
+                         "(4) Trade Partners' Import Prices from Japan")
+
+stargazer(unirt_res, summary = F, type = "latex", rownames = T, colnames = F,
+          font.size = "footnotesize", label = "fig:unit-root",
+          column.sep.width = "10pt", no.space = F,
+          title = "Data Coverage of Data on Japan's Export Prices and on the Trade Partners' Import Prices from Japan",
+          notes = "\\parbox{15cm}{\\textit{Notes:} We perform a panel unit-root test on the variables. The variables are logged differencials. Row (1) show the results on data for Japan's import prices (Perspective I.), row (2) show the results on data for the 38 OECD countrys' export prices to Japan (Perspective II.), rows (3) show the results on data for Japan's export prices (Perspective III.), and row (4) show the results on data for the 38 OECD countrys' import prices from Japan (Perspective IV.). Each column shows the p-value from the Im–Pesaran–Shin (IPS) panel unit root test. The null hypothesis $H_0$ is that all panel units contain a unit root. As we reject the null hypothesis, there are no unit root and the data is stationary.}")
+
+# Example output interpretation: 
+# If the p-value is less than 0.05, you reject the null hypothesis of a unit root, 
+# concluding the data is likely stationary.
+
+
+
+# Poolability.
+pooltest_a1 <- pooltest(model1_1_sr, data = rgpdf_country_a1, effect = "individual", model = "within")
+pooltest_a2 <- pooltest(model1_1_sr, data = rgpdf_country_a2, effect = "individual", model = "within")
+pooltest_a3 <- pooltest(model1_1_sr, data = rgpdf_country_a3, effect = "individual", model = "within")
+pooltest_a4 <- pooltest(model1_1_sr, data = rgpdf_country_a4, effect = "individual", model = "within")
+
+# Hausman Test (if p < 0.05, use fix).
+hm_a1_fix <- plm(model1_1_sr, data = rgpdf_country_a1, effect = "individual", model = "within")
+hm_a1_rdm <- plm(model1_1_sr, data = rgpdf_country_a1, effect = "individual", model = "random")
+hm_a2_fix <- plm(model1_1_sr, data = rgpdf_country_a2, effect = "individual", model = "within")
+hm_a2_rdm <- plm(model1_1_sr, data = rgpdf_country_a2, effect = "individual", model = "random")
+hm_a3_fix <- plm(model1_1_sr, data = rgpdf_country_a3, effect = "individual", model = "within")
+hm_a3_rdm <- plm(model1_1_sr, data = rgpdf_country_a3, effect = "individual", model = "random", random.method = "nerlove")
+hm_a4_fix <- plm(model1_1_sr, data = rgpdf_country_a4, effect = "individual", model = "within")
+hm_a4_rdm <- plm(model1_1_sr, data = rgpdf_country_a4, effect = "individual", model = "random", random.method = "nerlove")
+
+hmtest_a1 <- phtest(hm_a1_fix, hm_a1_rdm)
+hmtest_a2 <- phtest(hm_a2_fix, hm_a2_rdm)
+hmtest_a3 <- phtest(hm_a3_fix, hm_a3_rdm)
+hmtest_a4 <- phtest(hm_a4_fix, hm_a4_rdm)
+```
+
