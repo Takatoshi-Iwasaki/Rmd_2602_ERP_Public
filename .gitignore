@@ -1,1 +1,14 @@
 
+data/.DS_Store
+data/FRED_POILWTIUSDQ.csv
+data/IMF_RES_WEO.csv
+data/IMF_STA_CPI.csv
+data/IMF_STA_ER.csv
+data/IMF_STA_GDP_Annual.csv
+data/IMF_STA_GDP_Quarterly.csv
+data/IMF_STA_IMTS.csv
+data/IMF_STA_MFS_CBS.csv
+data/IMF_STA_PI.csv
+data/IMF_STA_PPI.csv
+data/OECD_TPS_IMTS.csv
+OECD_1970-2025_Quarterly.csv
