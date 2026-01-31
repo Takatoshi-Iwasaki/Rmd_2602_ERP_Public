@@ -138,17 +138,17 @@ df_frequency <- "Quarterly"
 ```{r Read Data, include=FALSE}
 ## Read data from external file. 
 # Trade data (IMTS)
-IMTS <- read_csv("data/IMF_STA_IMTS.csv")
+IMTS <- read_csv("../data/IMF_STA_IMTS.csv")
 # Annual GDP (GDPA)
-GDPA <- read_csv("data/IMF_STA_GDP_Annual.csv")
+GDPA <- read_csv("../data/IMF_STA_GDP_Annual.csv")
 # Quarterly GDP (GDPQ)
-GDPQ <- read_csv("data/IMF_STA_GDP_Quarterly.csv")
+GDPQ <- read_csv("../data/IMF_STA_GDP_Quarterly.csv")
 # Producer Cost (PPI)
-PPI <- read_csv("data/IMF_STA_PPI.csv")
+PPI <- read_csv("../data/IMF_STA_PPI.csv")
 # Exchange Rate (ER)
-ER <- read_csv("data/IMF_STA_ER.csv")
+ER <- read_csv("../data/IMF_STA_ER.csv")
 # Effective Exchange Rate (EER)
-EER <- read_csv("data/IMF_STA_EER.csv")
+EER <- read_csv("../data/IMF_STA_EER.csv")
 ```
 
 ```{r Select years and countries}

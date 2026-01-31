@@ -74,7 +74,7 @@ fnote <- "\\parbox{15cm}{Quarterly data from 1997 Q1 to 2025 Q3. Trade data from
 
 ```{r}
 # Load the cleaned data and do regressinon.
-lmdf_read <- readRDS("OECD_1970-2025_Quarterly.rds")
+lmdf_read <- readRDS("../output/OECD_1970-2025_Quarterly.rds")
 ```
 
 ```{r}
