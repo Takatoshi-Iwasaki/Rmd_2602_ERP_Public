@@ -100,7 +100,7 @@ lmdf <- lmdf_read[lmdf_read$country %in% country_list, ] %>%
   .[.$counterpart_country %in% counterpart_country_list, ] %>% 
   .[.$year >= start & .$year <= end, ]
 
-oil <- read_csv("data/FRED_POILWTIUSDQ.csv")
+oil <- read_csv("../data/FRED_POILWTIUSDQ.csv")
 colnames(oil) <- c("year", "oil_price")
 oil$year <- oil$year %>% as.yearqtr()
 

@@ -147,8 +147,6 @@ GDPQ <- read_csv("../data/IMF_STA_GDP_Quarterly.csv")
 PPI <- read_csv("../data/IMF_STA_PPI.csv")
 # Exchange Rate (ER)
 ER <- read_csv("../data/IMF_STA_ER.csv")
-# Effective Exchange Rate (EER)
-EER <- read_csv("../data/IMF_STA_EER.csv")
 ```
 
 ```{r Select years and countries}
